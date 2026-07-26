@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>assent — approval-chain playground</title>
+    <meta
+      name="description"
+      content="An in-browser, zero-backend playground for assent: build an approval chain and drive it live — quorum and unanimous rules, delegation on behalf of an absent approver, four-eyes segregation of duties, and SLA escalation — over the pure Go core compiled to WebAssembly. One page, three composed libraries: fsmx drives the lifecycle, sundial fires the SLA, chronicle keeps the trail."
+    />
+    <link rel="stylesheet" href="style.css" />
+    <!-- The Go WebAssembly runtime shim. Relative path so the site works at /assent/. -->
+    <script src="wasm_exec.js"></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <h1>assent</h1>
+        <p class="tagline">approval chains · delegation · SLA escalation · four-eyes · audit trail</p>
+        <nav class="links">
+          <a href="https://github.com/zkrebbekx/assent" rel="noopener">Repo</a>
+          <a href="https://github.com/zkrebbekx/assent/blob/main/docs/DESIGN.md" rel="noopener">Design</a>
+          <a href="https://pkg.go.dev/github.com/zkrebbekx/assent" rel="noopener">API docs</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <p>
+          <strong>assent</strong> is the human <em>approval and escalation</em> layer a
+          durable-workflow engine leaves out. A <em>request</em> moves through a
+          <em>chain</em> of ordered <em>steps</em>; each step gates on a
+          <em>rule</em> — <em>anyone</em>, a <em>quorum of M</em>, or
+          <em>unanimous</em> — over its approvers. Build one below and drive it
+          click by click: approve and reject, delegate while an approver is away,
+          hit the four-eyes wall, and tick an SLA clock until it escalates.
+        </p>
+        <p class="teaching-note">
+          <strong>One page, three libraries.</strong> assent owns the approval
+          logic and <em>composes</em> three first-party siblings, so it carries no
+          third-party dependencies. Everything below runs in your tab over the
+          pure library compiled to WebAssembly — no backend, no network. Reload to
+          reset. Built from
+          <a href="https://github.com/zkrebbekx/assent" rel="noopener">zkrebbekx/assent</a>.
+        </p>
+        <div class="lib-strip" aria-label="Composed libraries">
+          <div class="lib-chip fsmx">
+            <span class="lib-name">fsmx</span>
+            <span class="lib-role">drives the lifecycle machine — Draft → Pending → Approved / Rejected / Withdrawn. An illegal transition is impossible.</span>
+          </div>
+          <div class="lib-chip sundial">
+            <span class="lib-name">sundial</span>
+            <span class="lib-role">runs each step's SLA over a business calendar. On breach, assent applies the escalation action once.</span>
+          </div>
+          <div class="lib-chip chronicle">
+            <span class="lib-name">chronicle</span>
+            <span class="lib-role">holds the append-only audit trail — actor, authority, reason, timestamp. No entry is ever rewritten.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="scenarios" aria-label="Scenarios">
+        <span class="scenarios-label">Start with a story:</span>
+        <div id="scenario-buttons" class="scenario-buttons"></div>
+      </section>
+      <p id="scenario-note" class="scenario-note" hidden></p>
+
+      <!-- ============ FLAGSHIP: build + drive ============ -->
+      <section class="panel" id="panel-drive" aria-label="Build and drive an approval chain">
+        <h2>Drive an approval chain <span class="lib-tag fsmx">lifecycle = fsmx</span></h2>
+        <p class="panel-sub">
+          Build a chain on the left, then <strong>Submit</strong> and drive it on
+          the right. Click an approver on the <em>active</em> step to approve
+          (<span class="ok">✓</span>) or reject (<span class="no">✗</span>). Watch the
+          quorum counter fill, the chain advance step to step, and the state badge
+          transition. The badge <em>is</em> the real fsmx machine.
+        </p>
+        <div class="flag-body">
+          <div class="flag-controls">
+            <div class="builder">
+              <div class="grid2">
+                <label class="field"><span>Maker (raises it)</span><input id="b-maker" type="text" value="alice" /></label>
+                <label class="field"><span>Series (scopes delegation)</span><input id="b-series" type="text" value="expense" /></label>
+              </div>
+              <label class="field"><span>Subject (opaque reference)</span><input id="b-subject" type="text" value="expense #4021 — $4,000" /></label>
+              <label class="field"><span>Segregation of duties</span>
+                <select id="b-sod">
+                  <option value="none">Maker-checker only (default)</option>
+                  <option value="separate_steps">+ SeparateSteps (no double sign-off)</option>
+                </select>
+              </label>
+              <p class="mini-label">Steps (run in order)</p>
+              <div id="steps-editor" class="steps-editor"></div>
+              <button id="add-step-btn" class="btn ghost small" type="button">+ Add step</button>
+              <div class="submit-row">
+                <button id="submit-btn" class="btn" type="button">Submit / restart chain</button>
+              </div>
+            </div>
+          </div>
+          <div class="flag-visual">
+            <div class="drive-head">
+              <div class="badge-wrap">
+                <span class="state-badge" id="state-badge">—</span>
+                <span class="badge-note" id="badge-note"></span>
+              </div>
+              <button id="withdraw-btn" class="btn ghost small" type="button">Withdraw (maker only)</button>
+            </div>
+            <div id="chain" class="chain"></div>
+            <p id="drive-err" class="err-banner" hidden></p>
+          </div>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <!-- ============ four-eyes / SoD ============ -->
+        <section class="panel" id="panel-foureyes" aria-label="Four-eyes and segregation of duties">
+          <h2>Four-eyes &amp; SoD</h2>
+          <p class="panel-sub">
+            The maker cannot be a checker. Four-eyes bars the <em>physical
+            person</em> — not just the counted authority — so borrowing an
+            approver's delegation does not get the maker in.
+          </p>
+          <div class="actor-card">
+            <span class="actor-avatar maker" id="fe-maker-avatar">A</span>
+            <div>
+              <div class="actor-name" id="fe-maker-name">alice</div>
+              <div class="actor-role">maker of this request</div>
+            </div>
+          </div>
+          <div class="btn-col">
+            <button id="fe-as-maker" class="btn danger-ghost small" type="button">Approve as the maker</button>
+            <button id="fe-as-maker-deleg" class="btn danger-ghost small" type="button">Grant the maker a delegation, then approve for the delegator</button>
+          </div>
+          <p id="fe-result" class="teach-banner" hidden></p>
+          <div class="sod-toggle">
+            <label class="check"><input id="fe-sod" type="checkbox" /> <span>Enforce <code>SeparateSteps</code> (rebuilds the chain)</span></label>
+            <p class="mini-note">With SoD on, a person who signed one step cannot sign another of the same request (<code>ErrSeparation</code>).</p>
+          </div>
+        </section>
+
+        <!-- ============ delegation ============ -->
+        <section class="panel" id="panel-delegation" aria-label="Delegation">
+          <h2>Delegation <span class="lib-tag chronicle">provenance on the trail</span></h2>
+          <p class="panel-sub">
+            An approver on vacation delegates to a deputy. A decision the deputy
+            makes counts <em>once, under the authority</em>, and the trail records
+            both — “carol, as bob”. Outside the window it is
+            <code>ErrNoDelegation</code>.
+          </p>
+          <div class="deleg-editor">
+            <div class="grid2">
+              <label class="field"><span>From (authority)</span><input id="d-from" type="text" placeholder="bob" /></label>
+              <label class="field"><span>To (delegate)</span><input id="d-to" type="text" placeholder="carol" /></label>
+            </div>
+            <div class="grid2">
+              <label class="field"><span>Window start</span><input id="d-start" type="datetime-local" /></label>
+              <label class="field"><span>Window end (exclusive)</span><input id="d-end" type="datetime-local" /></label>
+            </div>
+            <label class="field"><span>Series scope (blank = all)</span><input id="d-series" type="text" placeholder="expense" /></label>
+            <button id="d-add" class="btn ghost small" type="button">+ Add delegation</button>
+          </div>
+          <div id="deleg-list" class="deleg-list"></div>
+          <div class="onbehalf">
+            <p class="mini-label">Approve on behalf of an authority</p>
+            <div class="grid3">
+              <label class="field"><span>Delegate acts</span><input id="ob-actor" type="text" placeholder="carol" /></label>
+              <label class="field"><span>For authority</span><input id="ob-auth" type="text" placeholder="bob" /></label>
+              <label class="field"><span>Reason</span><input id="ob-reason" type="text" value="covering" /></label>
+            </div>
+            <div class="btn-col">
+              <button id="ob-approve" class="btn small" type="button">Approve on behalf (inside window)</button>
+              <button id="ob-outside" class="btn ghost small" type="button">Try with a decision timed outside the window</button>
+            </div>
+          </div>
+          <p id="deleg-err" class="teach-banner" hidden></p>
+        </section>
+      </div>
+
+      <div class="two-col">
+        <!-- ============ SLA escalation ============ -->
+        <section class="panel" id="panel-sla" aria-label="SLA escalation">
+          <h2>SLA escalation <span class="lib-tag sundial">clock = sundial</span></h2>
+          <p class="panel-sub">
+            Each step may carry an SLA over a business calendar (Mon–Fri,
+            09:00–17:00). assent starts a <strong>sundial</strong> timer at step
+            entry and polls it on <code>Tick</code>. On breach it applies the
+            action once — here, add a fallback approver.
+          </p>
+          <div class="clock-row">
+            <div class="clock-face">
+              <span class="clock-label">session clock</span>
+              <span id="sla-clock" class="clock-val">—</span>
+            </div>
+            <div class="tick-controls">
+              <label class="field inline"><span>advance</span>
+                <input id="sla-hours" type="number" min="1" max="80" step="1" value="9" />
+                <span>working&nbsp;h</span>
+              </label>
+              <button id="sla-tick" class="btn small" type="button">Tick the clock</button>
+            </div>
+          </div>
+          <div id="sla-body" class="sla-body"></div>
+          <p id="sla-err" class="err-banner" hidden></p>
+        </section>
+
+        <!-- ============ audit trail ============ -->
+        <section class="panel" id="panel-trail" aria-label="Audit trail">
+          <h2>The audit trail <span class="lib-tag chronicle">store = chronicle</span></h2>
+          <p class="panel-sub">
+            Every event is an append-only entry on a <strong>chronicle</strong>
+            log — the submit, each decision (with actor, authority and reason),
+            each advance, warn, escalation and state change. It is
+            <em>never rewritten</em>.
+          </p>
+          <ol id="trail" class="trail"></ol>
+        </section>
+      </div>
+
+      <footer class="footer">
+        <p>
+          Runs entirely in your tab over the pure approval core compiled to
+          WebAssembly — no backend, no network. assent owns the approval logic and
+          composes <strong>fsmx</strong>, <strong>sundial</strong> and
+          <strong>chronicle</strong>. Reload to reset. Built from
+          <a href="https://github.com/zkrebbekx/assent" rel="noopener">zkrebbekx/assent</a>.
+        </p>
+      </footer>
+    </main>
+
+    <div id="boot" class="boot">Loading the assent engine…</div>
+  </body>
+</html>
